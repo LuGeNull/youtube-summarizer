@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "yt-watcher",
+  "version": "1.0.0",
+  "description": "Zeigt neben YouTube-Videos eine KI-Zusammenfassung vom lokalen yt-watcher-Dienst.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxmHFJVK3YGDeuY+WToC2t5xzxY64NvS4ciHycbkQIeiWhLmQ0Pq/83WJDhVRyD1J/yD6r+Gxp7QwN4DyQaB6BL/9b9h7dkHUxHreDvhMNt7FEUqlf41FnFV9rK8DUT38qUH0dpVo1oJl20xSnE3Uf9ECy8dOQDBNtgKvT/7cihNoxUCpoYsOxFQJIaqedKrlguMaRw/fddeURB6hdKoDJHXaYz0UJ4TzrwetchCY6HEJVJZ7Ve5T+RIe5vpwK8gfPuWSgwQpiGIOGfg/z26lOJrfL5ayadgbMd7TfdFf9oUVmg46uzHhQ+ChSmUuPcMsVuh2LZXoFgC8S0OD7OdwvQIDAQAB",
+  "host_permissions": ["http://localhost:47816/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

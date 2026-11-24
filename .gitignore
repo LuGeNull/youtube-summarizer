@@ -2,3 +2,6 @@
 cache/
 zusammenfassungen.md
 node_modules/
+tests/out/
+package-lock.json
+dienst.log*
