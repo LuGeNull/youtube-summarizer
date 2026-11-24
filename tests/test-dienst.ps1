@@ -25,7 +25,7 @@ $h = @{ 'X-YtWatcher' = '1' }
 
 if ($Part -eq 'static') {
     $r = Req GET "$base/health"
-    Check 'health 200, Fassung 11' ($r.Status -eq 200 -and $r.Json.version -eq '11' -and $r.Json.state -eq 'ok') $r.Raw
+    Check 'health 200, Fassung 12' ($r.Status -eq 200 -and $r.Json.version -eq '12' -and $r.Json.state -eq 'ok') $r.Raw
     Check 'health ohne CORS-Kopfzeilen' (-not ($r.Headers.Keys -match '^Access-Control'))
 
     $r = Req GET "$base/summary?v=W8Dl-TS9H2c"
@@ -67,6 +67,18 @@ if ($Part -eq 'static') {
     Check 'unbekannter Pfad -> 404' ($r.Status -eq 404)
     $r = Req DELETE "$base/summary?v=W8Dl-TS9H2c" $h
     Check 'DELETE -> 405' ($r.Status -eq 405)
+
+    # Einordnung: Nachfragen startet nichts
+    $r = Req GET "$base/assess?v=zzzzzzzzzzz" $h
+    Check 'assess: GET ohne Cache -> none, startet nichts' ($r.Status -eq 200 -and $r.Json.state -eq 'none') $r.Raw
+    $r = Req GET "$base/assess?v=W8Dl-TS9H2c"
+    Check 'assess ohne Kopfzeile -> 403' ($r.Status -eq 403)
+    $r = Req POST "$base/assess?v=W8Dl-TS9H2c" ($h + @{ Origin = 'https://evil.example' })
+    Check 'assess mit fremdem Origin -> 403' ($r.Status -eq 403)
+    $r = Req GET "$base/assess?v=W8Dl-TS9H2c&force=1" $h
+    Check 'assess: force=1 mit GET -> 405' ($r.Status -eq 405)
+    $r = Req POST "$base/assess?v=abc" $h
+    Check 'assess: ungueltige ID -> 400' ($r.Status -eq 400)
 
     $r = Req GET 'http://127.0.0.1:47816/health'
     Check 'anderer Host-Name (127.0.0.1) wird abgewiesen' ($r.Status -eq 400) "$($r.Status)"

@@ -81,6 +81,10 @@
     .mono { font-family: Consolas, 'Roboto Mono', monospace; }
     .ts { padding: 0; color: var(--ytw-acc); font-variant-numeric: tabular-nums; white-space: nowrap; }
     .ts:hover { text-decoration: underline; }
+    .assess { margin-top: 8px; }
+    .fold-toggle:disabled { cursor: default; opacity: 0.75; }
+    .link { padding: 0; color: var(--ytw-acc); font-size: inherit; }
+    .link:hover { text-decoration: underline; }
   `;
 
   let videoId = null;      // aktuell erkannte Video-ID (null = keine Watch-Seite)
@@ -100,6 +104,8 @@
   let host = null;
   let root = null;         // geschlossener Shadow-Root, nur hier erreichbar
   let box, statusEl, regenBtn, toggleBtn, bodyEl;
+  let assess = null;       // Einordnung zum angezeigten Video: { btn, area, state, startedAt }
+  let assessTimer = 0;
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -119,6 +125,7 @@
   function clearTimers() {
     clearTimeout(startTimer);
     clearTimeout(pollTimer);
+    clearTimeout(assessTimer);
     if (visHandler) document.removeEventListener('visibilitychange', visHandler);
     visHandler = null;
   }
@@ -171,6 +178,7 @@
     if ((state === 'pending' || state === 'offline') && !extAlive()) return contextLost('Kontext ungültig');
     place();
     if (state === 'pending') updatePending();
+    if (assess && assess.state === 'pending') updateAssessLabel(assess);
     updateFade(); // Fenstergröße oder Layout können sich geändert haben
   }
 
@@ -226,6 +234,7 @@
       const frag = document.createDocumentFragment();
       renderSummary(res.summary, frag);
       setState('done', typeof res.model === 'string' ? res.model : '', frag);
+      buildAssess(t);
     } else {
       showError(st === 'error' ? res : { code: 'bad_response' });
     }
@@ -245,6 +254,9 @@
   // ---------- Zustände der Box ----------
 
   function setState(s, statusText, ...nodes) {
+    // der Inhalt wird ersetzt, damit ist auch eine angezeigte oder laufende Einordnung weg
+    assess = null;
+    clearTimeout(assessTimer);
     state = s;
     box.dataset.state = s;
     statusEl.textContent = statusText;
@@ -307,36 +319,21 @@
 
   function paragraph(line, parent) {
     const heading = /^#{1,6}\s+(.+)$/.exec(line);
-    const p = el('p', heading ? 'h' : '');
+    const p = el('p', heading || isLabel(line) ? 'h' : '');
     inline(heading ? heading[1] : line, p);
     parent.append(p);
   }
 
-  // Aufbau der Zusammenfassung: Fließtext (Kurzfassung), dann eine Liste (Kernpunkte). Die
-  // Kurzfassung steht immer da, die Kernpunkte stecken hinter einem Knopf und sind zunächst zugeklappt.
-  // Erkannt wird das am Aufbau, nicht an den Abschnittsnamen: die schreibt das Modell je nach Sprache.
-  function renderSummary(text, container) {
-    const lines = text.split(/\r?\n/).map((s) => s.trim())
+  function splitLines(text) {
+    return text.split(/\r?\n/).map((s) => s.trim())
       // ältere Cache-Einträge enthalten noch einen Sponsor-Abschnitt; der wird nicht mehr gezeigt
       .filter((s) => !/^[*#\s]*Werbung\/Sponsor/i.test(s));
-    const firstBullet = lines.findIndex((s) => BULLET_RE.test(s));
-    let target = container;
-    let start = 0;
-    if (firstBullet > 0) {
-      start = firstBullet;
-      // Abschnittsnamen fallen weg: "Kurzfassung" ist der Kasten selbst, "Kernpunkte" steht auf dem Knopf
-      const body = lines.slice(0, firstBullet).filter((s) => s && !isLabel(s));
-      if (body.length) body[0] = body[0].replace(LABEL_LEAD_RE, '') || body[0];
-      for (const line of body) paragraph(line, container);
-      const btn = el('button', 'fold-toggle', 'Kernpunkte anzeigen');
-      btn.type = 'button';
-      btn.setAttribute('aria-expanded', 'false');
-      target = el('div', 'fold');
-      target.hidden = true;
-      container.append(btn, target);
-    }
+  }
+
+  // Absätze und Listen in der Reihenfolge des Textes; Abschnittsnamen werden fett.
+  function renderBlocks(lines, target) {
     let list = null;
-    for (const line of lines.slice(start)) {
+    for (const line of lines) {
       const bullet = BULLET_RE.exec(line);
       if (bullet) {
         // aufeinanderfolgende Aufzählungszeilen landen in derselben Liste
@@ -360,6 +357,148 @@
       list = null;
       if (line) paragraph(line, target);
     }
+  }
+
+  // Aufbau der Zusammenfassung: Fließtext (Kurzfassung), dann eine Liste (Kernpunkte). Die
+  // Kurzfassung steht immer da, die Kernpunkte stecken hinter einem Knopf und sind zunächst zugeklappt.
+  // Erkannt wird das am Aufbau, nicht an den Abschnittsnamen: die schreibt das Modell je nach Sprache.
+  function renderSummary(text, container) {
+    const lines = splitLines(text);
+    const firstBullet = lines.findIndex((s) => BULLET_RE.test(s));
+    let target = container;
+    let start = 0;
+    if (firstBullet > 0) {
+      start = firstBullet;
+      // Abschnittsnamen fallen weg: "Kurzfassung" ist der Kasten selbst, "Kernpunkte" steht auf dem Knopf
+      const body = lines.slice(0, firstBullet).filter((s) => s && !isLabel(s));
+      if (body.length) body[0] = body[0].replace(LABEL_LEAD_RE, '') || body[0];
+      for (const line of body) paragraph(line, container);
+      const btn = el('button', 'fold-toggle kp', 'Kernpunkte anzeigen');
+      btn.type = 'button';
+      btn.setAttribute('aria-expanded', 'false');
+      target = el('div', 'fold');
+      target.hidden = true;
+      container.append(btn, target);
+    }
+    renderBlocks(lines.slice(start), target);
+  }
+
+  // ---------- Einordnung (Fable, nur auf Klick) ----------
+
+  // Der Knopf sitzt unter der Zusammenfassung. Beim Anzeigen wird nur nachgesehen, ob es zu diesem
+  // Video schon eine Einordnung gibt; gestartet wird sie erst durch einen Klick.
+  function buildAssess(t) {
+    const btn = el('button', 'fold-toggle as', 'Einordnen');
+    btn.type = 'button';
+    btn.title = 'Fable 5.2 beurteilt ohne Internet, wie belastbar die Aussagen des Videos sind';
+    const area = el('div', 'fold');
+    area.hidden = true;
+    const wrap = el('div', 'assess');
+    wrap.append(btn, area);
+    bodyEl.append(wrap);
+    assess = { btn, area, state: 'none', startedAt: 0 };
+    askAssess('peek', assess, t);
+  }
+
+  // mode: peek = nur nachsehen, start = anstoßen, force = neu erzeugen, poll = auf das Ergebnis warten
+  function askAssess(mode, a, t) {
+    try {
+      chrome.runtime.sendMessage({ type: 'assess', videoId, mode }, (res) => {
+        let err = null;
+        try {
+          err = chrome.runtime.lastError || null;
+        } catch (e) {
+          err = e;
+        }
+        if (t !== token || a !== assess) return;
+        if (!err) handleAssess(res, mode, a, t);
+        else if (!extAlive()) contextLost(err);
+        else if (mode !== 'peek') pollAssess(2000, mode, a, t); // Service-Worker mitten in der Anfrage beendet
+      });
+    } catch (e) {
+      contextLost(e);
+    }
+  }
+
+  function pollAssess(ms, mode, a, t) {
+    clearTimeout(assessTimer);
+    assessTimer = setTimeout(() => {
+      if (t === token && a === assess) askAssess(mode, a, t);
+    }, ms);
+  }
+
+  function handleAssess(res, mode, a, t) {
+    const st = res && typeof res.state === 'string' ? res.state : '';
+    if (st === 'pending') {
+      if (a.state !== 'pending') {
+        // läuft schon (Seite während der Einordnung neu geladen)
+        a.state = 'pending';
+        a.startedAt = Date.now() - (Number(res.seconds) || 0) * 1000;
+      }
+      a.btn.disabled = true;
+      updateAssessLabel(a);
+      pollAssess(2000, 'poll', a, t);
+    } else if (st === 'done' && typeof res.text === 'string') {
+      a.state = 'done';
+      a.btn.disabled = false;
+      a.area.replaceChildren();
+      renderBlocks(splitLines(res.text), a.area);
+      const foot = el('p', 'sub', `${typeof res.model === 'string' ? res.model : 'Modell'}, ohne Internet, nur aus eigenem Wissen · `);
+      const redo = el('button', 'link redo', 'neu einordnen');
+      redo.type = 'button';
+      foot.append(redo);
+      a.area.append(foot);
+      // Wer darauf gewartet hat, sieht das Ergebnis sofort; eine ältere Einordnung bleibt zugeklappt
+      setAssessOpen(a, mode !== 'peek');
+    } else if (mode === 'peek') {
+      // nichts vorhanden, Dienst nicht erreichbar oder ein früherer Fehlversuch: Knopf bleibt "Einordnen"
+      a.state = st === 'error' ? 'error' : 'none';
+    } else if (mode === 'poll' && st === 'offline') {
+      pollAssess(5000, mode, a, t); // Dienst kurz weg: weiter warten
+    } else if (st === 'error' && res.code === 'busy') {
+      pollAssess(5000, mode, a, t); // Warteschlange voll: derselbe Auftrag nochmal
+    } else {
+      // Nach einem Fehlversuch liegt beim Dienst eine Fehlermarke; der nächste Klick übergeht sie
+      a.state = st === 'offline' ? 'none' : 'error';
+      a.btn.disabled = false;
+      a.btn.textContent = 'Einordnen';
+      const nodes = [el('p', '', st === 'offline' ? 'Der lokale Dienst läuft nicht.' : 'Die Einordnung ist fehlgeschlagen.')];
+      if (res && typeof res.message === 'string' && res.message) nodes.push(el('p', 'sub', res.message));
+      a.area.replaceChildren(...nodes);
+      a.area.hidden = false;
+      updateFade();
+    }
+  }
+
+  function updateAssessLabel(a) {
+    a.btn.textContent = `Wird eingeordnet … ${Math.max(0, Math.floor((Date.now() - a.startedAt) / 1000))} s`;
+  }
+
+  function setAssessOpen(a, open) {
+    a.area.hidden = !open;
+    a.btn.textContent = open ? 'Einordnung ausblenden' : 'Einordnung anzeigen';
+    a.btn.setAttribute('aria-expanded', String(open));
+    // die Einordnung steht unter der Zusammenfassung: beim Öffnen im Kasten dorthin scrollen
+    if (open) bodyEl.scrollTop += a.btn.getBoundingClientRect().top - bodyEl.getBoundingClientRect().top;
+    updateFade();
+  }
+
+  function startAssess(a, mode) {
+    a.state = 'pending';
+    a.startedAt = Date.now();
+    a.btn.disabled = true;
+    a.area.hidden = true;
+    a.area.replaceChildren();
+    updateAssessLabel(a);
+    updateFade();
+    askAssess(mode, a, token);
+  }
+
+  function assessClick() {
+    const a = assess;
+    if (!a || a.state === 'pending') return;
+    if (a.state === 'done') setAssessOpen(a, a.area.hidden);
+    else startAssess(a, a.state === 'error' ? 'force' : 'start');
   }
 
   // **fett** -> <strong>; ein einzelnes ** ohne Partner bleibt wörtlich stehen.
@@ -462,15 +601,17 @@
     root.addEventListener('click', (ev) => {
       const btn = ev.target.closest('button.ts');
       if (btn) return seek(Number(btn.dataset.t));
-      const tgl = ev.target.closest('button.fold-toggle');
+      const tgl = ev.target.closest('button.kp');
       if (tgl) {
         const area = tgl.nextElementSibling;
         const open = area.hidden; // war zu, wird jetzt geöffnet
         area.hidden = !open;
         tgl.textContent = open ? 'Kernpunkte ausblenden' : 'Kernpunkte anzeigen';
         tgl.setAttribute('aria-expanded', String(open));
-        updateFade();
+        return updateFade();
       }
+      if (ev.target.closest('button.as')) return assessClick();
+      if (ev.target.closest('button.redo') && assess) startAssess(assess, 'force');
     });
     bodyEl.addEventListener('scroll', updateFade, { passive: true });
 

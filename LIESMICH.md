@@ -30,9 +30,15 @@ Prüfen, ob der Dienst läuft: <http://localhost:47816/health> im Browser öffne
 | „Wird zusammengefasst … 12 s“ | Dienst arbeitet (meist 12 bis 20 s). Erscheint 1 s nach dem Öffnen, nur im sichtbaren Tab. |
 | Kurzfassung | Steht immer da. Aus dem Cache kommt sie sofort. |
 | „Kernpunkte anzeigen“ | Klappt die Liste auf. Am Ende jedes Punktes steht der Zeitstempel; ein Klick darauf springt im Video. Bei jedem Video zunächst zugeklappt. |
+| „Einordnen“ | Nur auf Klick: Fable 5.2 beurteilt ohne Internet, wie belastbar das Video ist (Gesamturteil, bis zu 6 Behauptungen mit Urteil, Schwächen der Argumentation). Dauert 30 bis 60 s, wird gespeichert und heißt danach „Einordnung anzeigen“. |
 | „Dieses Video hat keine Untertitel“ | Weder automatische Untertitel in Originalsprache noch hochgeladene. |
 | „Der lokale Dienst läuft nicht“ | `start.cmd -Serve` starten; der Kasten erholt sich innerhalb von 5 s von selbst. |
 | „neu erzeugen“ | Übergeht den Cache für dieses Video. Auch der Weg, einen Fehler sofort zu wiederholen. |
+
+Die Einordnung stützt sich nur auf das Wissen des Modells. Bei aktuellen Ereignissen, neuen
+Produkten und genauen Zahlen schreibt es deshalb „nicht prüfbar“ statt zu raten; eine Recherche
+im Internet ersetzt sie nicht. Modell und Gründlichkeit stehen im Skript (`$AssessModel`,
+`$AssessEffort`).
 
 Der Textbereich ist höchstens 60 % der Fensterhöhe hoch und lässt sich mit dem Mausrad scrollen.
 Einen Scrollbalken gibt es nicht; stattdessen blendet der Text an der Kante aus, an der es
@@ -43,11 +49,12 @@ Shorts werden nicht zusammengefasst, Werbung und Sponsoren kommen in der Zusamme
 
 | Pfad | Zweck |
 |---|---|
-| `yt-watcher.ps1` | Skript, Fassung 11. Einstellungen stehen oben im Block „Einstellungen“. |
+| `yt-watcher.ps1` | Skript, Fassung 12. Einstellungen stehen oben im Block „Einstellungen“. |
 | `start.cmd` | Starter (umgeht die Ausführungsrichtlinie nur für diesen einen Lauf). |
 | `extension\` | Chrome-Erweiterung (Manifest V3): `background.js` spricht mit dem Dienst, `content.js` baut den Kasten. |
 | `cache\<VideoId>.json` | fertige Zusammenfassung (Titel, Sprache, Text, Datum, Modell). Löschen = Video gilt als neu. |
 | `cache\<VideoId>.err` | Fehlermarke des letzten Versuchs, gilt 30 Minuten, dann wird neu versucht. |
+| `cache\<VideoId>.assess.json` | gespeicherte Einordnung (dazu `.assess.err` als Fehlermarke). |
 | `dienst.log` | Meldungen des Dienstes. Ab 1 MB wird beim nächsten Start neu begonnen, die alte Datei heißt dann `dienst.log.alt`. |
 | `tests\` | Tests für Dienst und Browser, siehe unten. |
 | `zusammenfassungen.md` | Ausgabe des alten Beobachters. Der Dienst schreibt dort nichts mehr hinein (umschaltbar mit `$ArchiveToOutputFile = $true`). |
@@ -68,6 +75,8 @@ Shorts werden nicht zusammengefasst, Werbung und Sponsoren kommen in der Zusamme
 - `GET /summary?v=<ID>` → `{"state":"done",…}`, `{"state":"pending","phase":"queued"|"running",…}` oder
   `{"state":"error","code":…,"message":…}`. Die erste Anfrage für ein unbekanntes Video startet die Arbeit.
 - `POST /summary?v=<ID>&force=1` → erzeugt neu.
+- `GET /assess?v=<ID>` → Einordnung: `done` (mit `text`), `pending`, `error` oder `none`. Startet nichts.
+- `POST /assess?v=<ID>` → startet die Einordnung; mit `&force=1` auch trotz Cache oder Fehlermarke.
 
 Es läuft immer nur ein Video, weitere warten (höchstens 8). Ein wartendes Video, nach dem 20 s
 niemand mehr gefragt hat, wird verworfen: Beim Durchklicken wird nur zusammengefasst, was noch

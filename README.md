@@ -30,7 +30,9 @@ Stop the service with `.\start.cmd -Stop`. Its messages go to `dienst.log`.
 
 ## Notes
 
-- Each opened video costs one Claude call on your own account.
+- Each opened video costs one Claude call (Haiku) on your own account.
+- The "Einordnen" button asks a larger model (Fable) how well the video's claims hold up, from
+  the model's own knowledge and without web access. It only runs when you click it.
 - The service only listens on `localhost` and rejects requests from web pages; details in
   [LIESMICH.md](LIESMICH.md), section "Schutz".
 - The user interface and the code comments are in German. Summaries are written in the language

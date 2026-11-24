@@ -5,7 +5,8 @@
 // Der Test startet und beendet den Dienst selbst (vorher einen laufenden Dienst schliessen),
 // oeffnet echte YouTube-Seiten und loest dabei 2 bis 3 Zusammenfassungen aus. Bildschirmfotos
 // landen in tests\out\. Umgebungsvariablen: HEADFUL=1 zeigt das Fenster, ONLY=cache,spa,regen,
-// errors,layout waehlt Abschnitte, CHROME=<Pfad> nimmt ein anderes Chrome.
+// assess,errors,layout waehlt Abschnitte, CHROME=<Pfad> nimmt ein anderes Chrome. Der Abschnitt
+// assess loest einen Aufruf des grossen Modells aus (Einordnung).
 // Schlaegt hier etwas fehl, hat meist YouTube sein Seitengeruest geaendert (place() in content.js).
 import puppeteer from 'puppeteer-core';
 import { spawn, spawnSync } from 'node:child_process';
@@ -67,14 +68,18 @@ const PROBE = `(() => {
   if (!h) return { host: false };
   const r = chrome.dom.openOrClosedShadowRoot(h);
   const box = r.querySelector('.box');
+  const kp = r.querySelector('button.kp + .fold') || r; // nur die Kernpunkte, nicht die Einordnung
   const rect = h.getBoundingClientRect();
   return { host: true, parent: h.parentNode ? (h.parentNode.id || h.parentNode.tagName) : null,
     first: !!h.parentNode && h.parentNode.firstElementChild === h, place: h.dataset.place || '', dark: h.hasAttribute('dark'),
     state: box.dataset.state, status: r.querySelector('.status').textContent, collapsed: box.classList.contains('collapsed'),
     text: r.querySelector('.body').innerText, ts: r.querySelectorAll('button.ts').length,
-    strong: r.querySelectorAll('strong').length, li: r.querySelectorAll('li').length,
+    strong: r.querySelectorAll('strong').length, li: kp.querySelectorAll('li').length,
     regenDisabled: r.querySelector('.btn').disabled,
-    tsAtEnd: [...r.querySelectorAll('li')].filter((li) => li.lastElementChild && li.lastElementChild.matches('button.ts') && li.lastChild === li.lastElementChild && !/^\d/.test(li.textContent)).length,
+    assess: (() => { const b = r.querySelector('button.as'); const a = b && b.nextElementSibling;
+      return b ? { label: b.textContent, disabled: b.disabled, open: !a.hidden, li: a.querySelectorAll('li').length,
+        ts: a.querySelectorAll('button.ts').length, heads: a.querySelectorAll('p.h').length, text: a.innerText } : null; })(),
+    tsAtEnd: [...kp.querySelectorAll('li')].filter((li) => li.lastElementChild && li.lastElementChild.matches('button.ts') && li.lastChild === li.lastElementChild && !/^\d/.test(li.textContent)).length,
     gapBelow: (() => { let e = h.nextElementSibling; while (e && e.getBoundingClientRect().height === 0) e = e.nextElementSibling;
       return e ? Math.round(e.getBoundingClientRect().top - box.getBoundingClientRect().bottom) : null; })(),
     fold: (() => { const b = r.querySelector('.fold-toggle'), a = r.querySelector('.fold');
@@ -274,7 +279,40 @@ async function main() {
     const fin = await watch(t0, (x) => x.host && (x.state === 'done' || x.state === 'error'), 120000, 'neu erzeugen');
     const createdAfter = JSON.parse(fs.readFileSync(path.join(CACHE, 'W8Dl-TS9H2c.json'), 'utf8')).created;
     check('neue Zusammenfassung im Kasten und im Cache', fin.p.state === 'done' && createdAfter !== createdBefore, `${Math.round((Date.now() - t0) / 1000)} s; ${fin.p.text.slice(0, 80).replace(/\n/g, ' / ')}`);
-    check('Dienst hat "Neu erzeugen" gesehen', /Neu erzeugen angefragt: W8Dl-TS9H2c/.test(serviceLog));
+    check('Dienst hat "Neu erzeugen" gesehen', /Zusammenfassung neu angefragt: W8Dl-TS9H2c/.test(serviceLog));
+  }
+
+  // ---------- 3b. Einordnen (Fable, nur auf Klick) ----------
+  if (want('assess')) {
+    console.log('\n== 3b. Knopf "Einordnen"');
+    for (const f of ['W8Dl-TS9H2c.assess.json', 'W8Dl-TS9H2c.assess.err']) fs.rmSync(path.join(CACHE, f), { force: true });
+    const AS = `chrome.dom.openOrClosedShadowRoot(document.getElementById('ytw-host')).querySelector('button.as')`;
+    await gotoWatch('W8Dl-TS9H2c');
+    let r = await watch(Date.now(), (x) => x.host && x.state === 'done' && x.assess, 20000, 'Vorlauf');
+    await sleep(1500);
+    r.p = await probe();
+    check('Knopf "Einordnen" steht unter der Zusammenfassung, nichts laeuft von selbst', r.p.assess && r.p.assess.label === 'Einordnen' && !r.p.assess.disabled && !r.p.assess.open && !/Einordnung angefragt/.test(serviceLog), JSON.stringify({ ...r.p.assess, text: undefined }));
+    await extEval(`${AS}.click()`);
+    const t0 = Date.now();
+    await sleep(300);
+    let q = await probe();
+    check('Klick startet die Einordnung, Knopf zeigt den Fortschritt', /^Wird eingeordnet/.test(q.assess.label) && q.assess.disabled, q.assess.label);
+    r = await watch(t0, (x) => x.host && x.assess && !/^Wird eingeordnet/.test(x.assess.label), 240000, 'Einordnung');
+    q = r.p;
+    const secs = Math.round((Date.now() - t0) / 1000);
+    check('Einordnung erscheint aufgeklappt', q.assess.open && q.assess.label === 'Einordnung ausblenden' && q.assess.li >= 2 && q.assess.heads >= 2, `${secs} s, ${q.assess.li} Punkte, ${q.assess.heads} Abschnitte, ${q.assess.ts} Zeitstempel`);
+    check('Dienst hat dafuer Fable benutzt', /Ordne ein \([\d.,]+ Zeichen, Modell fable\)/.test(serviceLog) && JSON.parse(fs.readFileSync(path.join(CACHE, 'W8Dl-TS9H2c.assess.json'), 'utf8')).model === 'fable');
+    console.log('      ---\n' + q.assess.text.split('\n').filter(Boolean).map((l) => '      ' + l).join('\n') + '\n      ---');
+    await shot('3b-einordnung');
+    // neu laden: die gespeicherte Einordnung ist da, aber zugeklappt, und oeffnet sich ohne neuen Aufruf
+    const before = (serviceLog.match(/Einordnung (neu )?angefragt/g) || []).length;
+    await gotoWatch('W8Dl-TS9H2c');
+    r = await watch(Date.now(), (x) => x.host && x.assess && x.assess.label === 'Einordnung anzeigen', 20000, 'nach Neuladen');
+    check('nach Neuladen: gespeicherte Einordnung zugeklappt vorhanden', r.p.assess && r.p.assess.label === 'Einordnung anzeigen' && !r.p.assess.open);
+    await extEval(`${AS}.click()`);
+    await sleep(300);
+    q = await probe();
+    check('Klick oeffnet sie sofort, ohne neuen Aufruf', q.assess.open && q.assess.li >= 2 && (serviceLog.match(/Einordnung (neu )?angefragt/g) || []).length === before);
   }
 
   // ---------- 4. Fehlerfaelle ----------
